@@ -34,6 +34,8 @@ function quit() {
     process.exit(0);
 }
 
+console.log('=== Start ===');
+
 let lock = await client.getMailboxLock('INBOX');
 try {
     if (client.mailbox.exists === 0) {
@@ -57,12 +59,19 @@ try {
     let number = 1; // use smaller numbers instead of full UIDs to save on tokens
     let numberToUid = {};
     for (let message of messages) {
+        if (message.flags.has('nonspam')) {
+            continue;
+        }
         const fromEmail = message.envelope.from[0].address;
         const fromName = message.envelope.from[0].name;
         const subject = message.envelope.subject || "(No Subject)";
         numberToUid[number] = message.uid;
         emailList += `${number}: ${subject} | From: ${fromName} <${fromEmail}>\n`;
         number++;
+    }
+    if (number === 1) {
+        console.log("No messages to process");
+        quit();
     }
     const aiInput = `A list of email IDs, subjects, from name, and from email are given below. Score each email on a ranking of 0-100 for likelyhood of spam, with 100 meaning you are 100% sure it is spam. Only output a list of results like "ID: Score".\n\n${emailList}`;
     console.log(aiInput);
@@ -77,12 +86,13 @@ try {
         },
     });
 
-    console.log(response.text);
+    //console.log(response.text);
     const totalCost = response.usageMetadata.promptTokenCount * inputCost + response.usageMetadata.candidatesTokenCount * outputCost;
-    console.log(response.usageMetadata);
+    //console.log(response.usageMetadata);
     console.log("Total Cost:", totalCost);
 
     let spamUids = [];
+    let nonspamUids = [];
     response.text.split(/\r?\n/).forEach(line => {
         let [number, score] = line.split(/:/);
         number = parseInt(number.trim());
@@ -90,6 +100,8 @@ try {
         console.log(number, numberToUid[number], score);
         if ( score >= 90 ) {
             spamUids.push(numberToUid[number]);
+        } else {
+            nonspamUids.push(numberToUid[number]);
         }
     });
 
@@ -97,8 +109,12 @@ try {
     if ( spamUids.length > 0 ) {
         console.log("Moving", spamUids.length, "messages to Junk");
         await client.messageMove(spamUids, 'Junk', {uid: true});
-        console.log("Done");
     }
+    if ( nonspamUids.length > 0 ) {
+        console.log("Flagging", nonspamUids.length, "messages as non spam");
+        await client.messageFlagsAdd(nonspamUids, ['nonspam'], {uid: true});
+    }
+    console.log("=== Done ===");
 } finally {
     lock.release();
 }
